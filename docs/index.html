@@ -22,7 +22,7 @@ img{max-width:100%;height:auto;margin:10px 0}
 <h1>Barbell Permanent Portfolio + GEP Credit Overlay</h1>
 <div style="color:#666;font-size:12px">Base: 25 SPY / 10 TLT / 15 SHY / 25 GLD / 25 TIP &nbsp;·&nbsp;
 HYG tactical tilt from TIP</div>
-<div class="num">As of <b>2026-04-30</b> &nbsp;·&nbsp; generated 2026-04-13 18:33</div>
+<div class="num">As of <b>2026-04-30</b> &nbsp;·&nbsp; generated 2026-04-13 13:37</div>
 
 <div class="banner bucket-neutral">
 <b>Current signal: NEUTRAL</b> &nbsp;·&nbsp;
@@ -54,6 +54,62 @@ SPY 25 / TLT 10 / SHY 15 / GLD 25 held constant.
 <img src="figures/signal_history.png">
 </div>
 </div>
+
+<h2>How the credit signal works</h2>
+<p>The signal was discovered by <b>genetic-expression programming (GEP)</b>
+ — symbolic regression over hundreds of candidate formulas, pooled across
+HYG/LQD/MUB 2008-2024. Top-performing expressions all converged to the same
+shape, which is what's shown below.</p>
+
+<img src="figures/signal_tree.png">
+
+<p><b>What each piece means:</b></p>
+<ul>
+<li><b>vol_6m(HYG)</b> — 6-month realized volatility of HYG monthly returns.
+Economic logic: <i>spread mean-reversion</i>. When credit has been volatile,
+spreads have already widened; forward returns are elevated as spreads compress.
+Fama-French's <i>DEF</i> factor. Higher vol ⇒ higher forecast.</li>
+<li><b>sqrt(max(T10Y2Y, 0))</b> — square root of the 10y−2y term spread
+(clipped to zero; we don't go short credit on an inversion). Economic logic:
+<i>early-cycle bond rally.</i> Steepening curve ⇒ Fed cuts expected ⇒ falling
+yields ⇒ bond price gains and improving credit conditions. Sqrt dampens
+extremes. Steeper curve ⇒ higher forecast.</li>
+<li><b>Sum (the root '+')</b> — the two effects are additive in the evolved
+tree: vol-regime and curve-regime both independently push forward credit
+returns higher.</li>
+</ul>
+
+<p><b>How the current score is derived:</b></p>
+<table class="num">
+<tr><th>Component</th><th>Current value</th></tr>
+<tr><td>HYG monthly return std (trailing 6 months), <code>vol_6m</code></td>
+    <td>0.0101</td></tr>
+<tr><td>T10Y2Y term spread (FRED, month-end)</td>
+    <td>+0.50% pts</td></tr>
+<tr><td>max(T10Y2Y, 0)</td>
+    <td>0.5000</td></tr>
+<tr><td>sqrt of the above</td>
+    <td>0.7071</td></tr>
+<tr><td><b>Raw signal = vol_6m + sqrt(…)</b></td>
+    <td><b>0.7172</b></td></tr>
+<tr><td>Expanding-window mean μ (all months since 2008)</td>
+    <td>0.8929</td></tr>
+<tr><td>Expanding-window stdev σ</td>
+    <td>0.5389</td></tr>
+<tr><td><b>z = (raw − μ) / σ</b></td>
+    <td><b>-0.33</b></td></tr>
+<tr><td>Bucket rule</td><td>z ≥ +0.5 → ON (15 HYG / 10 TIP); −0.5 < z < +0.5 → NEUTRAL (7.5/17.5); z ≤ −0.5 → OFF (0/25)</td></tr>
+<tr><td><b>Current bucket</b></td><td><b>NEUTRAL</b></td></tr>
+</table>
+
+<p style="color:#666;font-size:12px">Note on statistical confidence: this signal
+was highly significant in-sample (p&lt;0.001 in pooled GEP across three credit
+assets over 16 years). When translated to a single-asset HYG timing rule, the
+backtested tactical excess over PP-base was +0.19% CAGR with t-stat 1.11 — not
+significant. We include the overlay in the dashboard because (a) the economic
+logic is sound and textbook, (b) the overlay is small (±7.5pp), (c) it costs
+near-nothing if it's wrong. Treat it as a low-confidence tilt, not a trading
+strategy.</p>
 
 <h2>CMA distributions (6-month forward total return)</h2>
 <img src="figures/cma.png">

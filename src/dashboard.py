@@ -94,6 +94,8 @@ def compute_signal_and_weights():
         "sig_raw_now": float(sig_raw.iloc[-1]),
         "t10y2y_now": float(t10y2y.loc[:asof].iloc[-1]),
         "hyg_vol6m_now": float(vol6.loc[:asof].iloc[-1]),
+        "mu_now": float(mu.iloc[-1]),
+        "sd_now": float(sd.iloc[-1]),
         "z_history": z,
         "rets_history": rets,
     }
@@ -150,7 +152,51 @@ def run_cma():
 def make_figures(sig, cma):
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
+    from matplotlib.patches import FancyBboxPatch
     plt.rcParams.update({"figure.dpi": 110, "font.size": 10})
+
+    # Signal expression tree with current values
+    vol6  = sig["hyg_vol6m_now"]
+    term  = sig["t10y2y_now"]
+    sqrt_term = float(np.sqrt(max(term, 0)))
+    raw   = sig["sig_raw_now"]
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.set_xlim(0, 10); ax.set_ylim(0, 6); ax.axis("off")
+
+    def box(x, y, text, w=2.4, h=0.9, color="#eef2f8", edge="#4a6fa0"):
+        b = FancyBboxPatch((x - w/2, y - h/2), w, h,
+                           boxstyle="round,pad=0.05",
+                           linewidth=1.5, edgecolor=edge, facecolor=color)
+        ax.add_patch(b)
+        ax.text(x, y, text, ha="center", va="center", fontsize=10)
+
+    def arrow(x1, y1, x2, y2):
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="-", color="#666", lw=1.2))
+
+    # Root: ADD
+    box(5, 5, f"+\nraw signal = {raw:.4f}", color="#ffe9d6", edge="#c06030")
+    # Left child: vol_6m value
+    box(2.5, 3, f"vol_6m(HYG)\n= {vol6:.4f}", color="#dfeedf", edge="#408040")
+    # Right child: sqrt
+    box(7.5, 3, f"sqrt\n= {sqrt_term:.4f}", color="#dfe6f3", edge="#4060a0")
+    # Right grandchild: max(t10y2y, 0)
+    box(7.5, 1, f"max(T10Y2Y, 0)\n= {max(term,0):.2f}%  (raw {term:+.2f}%)",
+        w=3.4, color="#f1edf7", edge="#7040a0")
+
+    arrow(5, 4.55, 2.5, 3.45); arrow(5, 4.55, 7.5, 3.45)
+    arrow(7.5, 2.55, 7.5, 1.45)
+
+    ax.text(5, 5.75, "GEP-evolved credit signal tree (HYG 6M forward return)",
+            ha="center", fontsize=11, weight="bold")
+    ax.text(5, 0.15,
+            f"z = (raw − μ_expanding) / σ_expanding  →  "
+            f"current z = {sig['z']:+.2f}  →  bucket = {sig['bucket']}",
+            ha="center", fontsize=9.5, color="#333",
+            bbox=dict(boxstyle="round,pad=0.4", fc="#fafafa", ec="#aaa"))
+    plt.tight_layout()
+    plt.savefig(FIG / "signal_tree.png", bbox_inches="tight"); plt.close()
 
     # Signal z over time with bucket bands
     fig, ax = plt.subplots(figsize=(9.5, 3.5))
@@ -252,6 +298,62 @@ SPY 25 / TLT 10 / SHY 15 / GLD 25 held constant.
 </div>
 </div>
 
+<h2>How the credit signal works</h2>
+<p>The signal was discovered by <b>genetic-expression programming (GEP)</b>
+ — symbolic regression over hundreds of candidate formulas, pooled across
+HYG/LQD/MUB 2008-2024. Top-performing expressions all converged to the same
+shape, which is what's shown below.</p>
+
+<img src="figures/signal_tree.png">
+
+<p><b>What each piece means:</b></p>
+<ul>
+<li><b>vol_6m(HYG)</b> — 6-month realized volatility of HYG monthly returns.
+Economic logic: <i>spread mean-reversion</i>. When credit has been volatile,
+spreads have already widened; forward returns are elevated as spreads compress.
+Fama-French's <i>DEF</i> factor. Higher vol ⇒ higher forecast.</li>
+<li><b>sqrt(max(T10Y2Y, 0))</b> — square root of the 10y−2y term spread
+(clipped to zero; we don't go short credit on an inversion). Economic logic:
+<i>early-cycle bond rally.</i> Steepening curve ⇒ Fed cuts expected ⇒ falling
+yields ⇒ bond price gains and improving credit conditions. Sqrt dampens
+extremes. Steeper curve ⇒ higher forecast.</li>
+<li><b>Sum (the root '+')</b> — the two effects are additive in the evolved
+tree: vol-regime and curve-regime both independently push forward credit
+returns higher.</li>
+</ul>
+
+<p><b>How the current score is derived:</b></p>
+<table class="num">
+<tr><th>Component</th><th>Current value</th></tr>
+<tr><td>HYG monthly return std (trailing 6 months), <code>vol_6m</code></td>
+    <td>{vol_val:.4f}</td></tr>
+<tr><td>T10Y2Y term spread (FRED, month-end)</td>
+    <td>{term_val:+.2f}% pts</td></tr>
+<tr><td>max(T10Y2Y, 0)</td>
+    <td>{term_clip:.4f}</td></tr>
+<tr><td>sqrt of the above</td>
+    <td>{sqrt_val:.4f}</td></tr>
+<tr><td><b>Raw signal = vol_6m + sqrt(…)</b></td>
+    <td><b>{raw:.4f}</b></td></tr>
+<tr><td>Expanding-window mean μ (all months since 2008)</td>
+    <td>{mu_val:.4f}</td></tr>
+<tr><td>Expanding-window stdev σ</td>
+    <td>{sd_val:.4f}</td></tr>
+<tr><td><b>z = (raw − μ) / σ</b></td>
+    <td><b>{z:+.2f}</b></td></tr>
+<tr><td>Bucket rule</td><td>{bucket_rule}</td></tr>
+<tr><td><b>Current bucket</b></td><td><b>{bucket}</b></td></tr>
+</table>
+
+<p style="color:#666;font-size:12px">Note on statistical confidence: this signal
+was highly significant in-sample (p&lt;0.001 in pooled GEP across three credit
+assets over 16 years). When translated to a single-asset HYG timing rule, the
+backtested tactical excess over PP-base was +0.19% CAGR with t-stat 1.11 — not
+significant. We include the overlay in the dashboard because (a) the economic
+logic is sound and textbook, (b) the overlay is small (±7.5pp), (c) it costs
+near-nothing if it's wrong. Treat it as a low-confidence tilt, not a trading
+strategy.</p>
+
 <h2>CMA distributions (6-month forward total return)</h2>
 <img src="figures/cma.png">
 <p style="color:#666;font-size:12px">80% prediction intervals from TimesFM 2.5 with current-regime volatility;
@@ -290,14 +392,24 @@ def render_html(sig, cma):
         f"<tr><td>{k}</td><td>{v*100:.1f}%</td></tr>"
         for k, v in sig["weights"].items() if v > 0
     )
+    term = sig["t10y2y_now"]
+    sqrt_val = float(np.sqrt(max(term, 0)))
+    bucket_rule = ("z ≥ +0.5 → ON (15 HYG / 10 TIP); "
+                   "−0.5 < z < +0.5 → NEUTRAL (7.5/17.5); "
+                   "z ≤ −0.5 → OFF (0/25)")
     html = HTML_TMPL.format(
         asof=sig["asof"].date().isoformat(),
         generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
         bucket=sig["bucket"],
         bucket_css=sig["bucket"].lower(),
         z=sig["z"], sig_raw=sig["sig_raw_now"],
-        vol=sig["hyg_vol6m_now"], term=sig["t10y2y_now"],
+        vol=sig["hyg_vol6m_now"], term=term,
         weights_rows=wrows,
+        vol_val=sig["hyg_vol6m_now"],
+        term_val=term, term_clip=max(term, 0),
+        sqrt_val=sqrt_val, raw=sig["sig_raw_now"],
+        mu_val=sig["mu_now"], sd_val=sig["sd_now"],
+        bucket_rule=bucket_rule,
     )
     (DASH / "index.html").write_text(html)
 
