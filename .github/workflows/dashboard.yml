@@ -1,0 +1,62 @@
+name: Monthly dashboard refresh
+
+on:
+  schedule:
+    # First day of each month at 14:00 UTC (~10am ET). Month-end yfinance data
+    # and FRED T10Y2Y are finalized by then.
+    - cron: "0 14 1 * *"
+  workflow_dispatch:         # allow manual "Run workflow" in the UI
+
+# Required so the workflow can commit the refreshed docs/ back to main.
+permissions:
+  contents: write
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU torch
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache HuggingFace weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-timesfm-2p5-200m
+          restore-keys: |
+            hf-timesfm-
+
+      - name: Run dashboard
+        run: python src/dashboard.py
+
+      - name: Commit refreshed dashboard
+        run: |
+          git config user.name "cma-dashboard-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Monthly refresh $(date -u +%Y-%m-%d)"
+            git push
+          fi

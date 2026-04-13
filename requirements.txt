@@ -1,0 +1,9 @@
+# CPU-only stack. torch CPU wheel is installed via --index-url in the workflow.
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+matplotlib>=3.8
+yfinance>=0.2.40
+huggingface_hub>=0.23
+safetensors>=0.5
+timesfm @ git+https://github.com/google-research/timesfm.git
