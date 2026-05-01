@@ -22,12 +22,12 @@ img{max-width:100%;height:auto;margin:10px 0}
 <h1>Barbell Permanent Portfolio + GEP Credit Overlay</h1>
 <div style="color:#666;font-size:12px">Base: 25 SPY / 10 TLT / 15 SHY / 25 GLD / 25 TIP &nbsp;·&nbsp;
 HYG tactical tilt from TIP</div>
-<div class="num">As of <b>2026-04-30</b> &nbsp;·&nbsp; generated 2026-04-13 18:40</div>
+<div class="num">As of <b>2026-04-30</b> &nbsp;·&nbsp; generated 2026-05-01 14:55</div>
 
 <div class="banner bucket-neutral">
 <b>Current signal: NEUTRAL</b> &nbsp;·&nbsp;
-credit-signal z = <b>-0.33</b>
-(raw signal 0.7172; HYG 6M vol 0.0101; 10y-2y +0.50%)
+credit-signal z = <b>-0.30</b>
+(raw signal 0.7289; HYG 6M vol 0.0078; 10y-2y +0.52%)
 <br>
 Rule: z ≥ +0.5 → ON (HYG 15% from TIP);
 −0.5 &lt; z &lt; +0.5 → NEUTRAL (HYG 7.5% / TIP 17.5%);
@@ -83,21 +83,21 @@ returns higher.</li>
 <table class="num">
 <tr><th>Component</th><th>Current value</th></tr>
 <tr><td>HYG monthly return std (trailing 6 months), <code>vol_6m</code></td>
-    <td>0.0101</td></tr>
+    <td>0.0078</td></tr>
 <tr><td>T10Y2Y term spread (FRED, month-end)</td>
-    <td>+0.50% pts</td></tr>
+    <td>+0.52% pts</td></tr>
 <tr><td>max(T10Y2Y, 0)</td>
-    <td>0.5000</td></tr>
+    <td>0.5200</td></tr>
 <tr><td>sqrt of the above</td>
-    <td>0.7071</td></tr>
+    <td>0.7211</td></tr>
 <tr><td><b>Raw signal = vol_6m + sqrt(…)</b></td>
-    <td><b>0.7172</b></td></tr>
+    <td><b>0.7289</b></td></tr>
 <tr><td>Expanding-window mean μ (all months since 2008)</td>
     <td>0.8929</td></tr>
 <tr><td>Expanding-window stdev σ</td>
     <td>0.5389</td></tr>
 <tr><td><b>z = (raw − μ) / σ</b></td>
-    <td><b>-0.33</b></td></tr>
+    <td><b>-0.30</b></td></tr>
 <tr><td>Bucket rule</td><td>z ≥ +0.5 → ON (15 HYG / 10 TIP); −0.5 < z < +0.5 → NEUTRAL (7.5/17.5); z ≤ −0.5 → OFF (0/25)</td></tr>
 <tr><td><b>Current bucket</b></td><td><b>NEUTRAL</b></td></tr>
 </table>
