@@ -121,10 +121,10 @@ def compute_signal_and_weights():
     sd = sig_raw.expanding(min_periods=36).std()
     z = (sig_raw - mu) / sd
 
-    if pd.isna(z.iloc[-1]):
+    if not np.isfinite(z.iloc[-1]):
         raise ValueError(
-            f"Computed z-score is NaN for {z.index[-1].date()}. "
-            f"Check input data integrity."
+            f"Computed z-score is {z.iloc[-1]} for {z.index[-1].date()}. "
+            f"Check input data integrity (sd={sd.iloc[-1]})."
         )
     asof = z.index[-1]
     z_now = float(z.iloc[-1])
