@@ -66,13 +66,11 @@ CMA_UNIVERSE = [
 # 1. Signal + allocation
 # -------------------------------------------------------------------
 def compute_signal_and_weights():
-    tickers = list(set(PROXIES.values()) | {GLD_FUTURES_FALLBACK})
+    tickers = sorted(set(PROXIES.values()) | {GLD_FUTURES_FALLBACK})
     px = _yf_download(tickers, start="1998-01-01")["Close"]
-    # Splice GLD ETF (post-2004) with GC=F futures (pre-2004)
+    # Splice: fill GLD NaNs before ETF inception (Nov 2004) with GC=F
     if "GLD" in px.columns and GLD_FUTURES_FALLBACK in px.columns:
-        gld_start = px["GLD"].first_valid_index()
-        if gld_start is not None:
-            px.loc[:gld_start, "GLD"] = px.loc[:gld_start, GLD_FUTURES_FALLBACK]
+        px["GLD"] = px["GLD"].fillna(px[GLD_FUTURES_FALLBACK])
     m = px.resample("ME").last()
     data = pd.DataFrame({k: m[v] for k, v in PROXIES.items()})
     latest = data.iloc[-1]
@@ -208,7 +206,10 @@ def run_cma():
         # historical 6M mean for recentering
         r6 = np.expm1(np.log(monthly[t].dropna()).diff().rolling(6).sum()).dropna()
         hmean = float(r6.iloc[:-6].mean()) if len(r6) > 6 else np.nan
-        shift = hmean - d["q50"]
+        if np.isnan(hmean):
+            shift = 0.0
+        else:
+            shift = hmean - d["q50"]
         for k in ("q10", "q50", "q90", "mean"):
             d[k + "_adj"] = d[k] + shift
         d["hist_mean_6m"] = hmean
@@ -334,6 +335,7 @@ def make_figures(sig, cma):
 # -------------------------------------------------------------------
 HTML_TMPL = """<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PP + GEP Credit Overlay — {asof}</title>
 <style>
 body{{font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
@@ -350,6 +352,7 @@ th{{background:#f4f4f4;text-align:left}}
 .num{{font-variant-numeric:tabular-nums}}
 img{{max-width:100%;height:auto;margin:10px 0}}
 .two-col{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+@media(max-width:700px){{.two-col{{grid-template-columns:1fr}}}}
 .footnote{{color:#666;font-size:12px;margin-top:40px;border-top:1px solid #ddd;padding-top:10px}}
 </style></head>
 <body>
@@ -421,7 +424,7 @@ returns higher.</li>
     <td>{sqrt_val:.4f}</td></tr>
 <tr><td><b>Raw signal = vol_6m + sqrt(…)</b></td>
     <td><b>{raw:.4f}</b></td></tr>
-<tr><td>Expanding-window mean μ (all months since 2008)</td>
+<tr><td>Expanding-window mean μ (from first 36 months onward)</td>
     <td>{mu_val:.4f}</td></tr>
 <tr><td>Expanding-window stdev σ</td>
     <td>{sd_val:.4f}</td></tr>
@@ -503,6 +506,12 @@ def render_html(sig):
 # -------------------------------------------------------------------
 # 5. Append to history log
 # -------------------------------------------------------------------
+HISTORY_COLUMNS = [
+    "asof", "generated", "z", "bucket", "sig_raw", "t10y2y", "hyg_vol6m",
+    "w_SPY", "w_TLT", "w_SHY", "w_GLD", "w_TIP", "w_HYG",
+]
+
+
 def log_history(sig):
     row = {
         "asof": sig["asof"].date().isoformat(),
@@ -513,7 +522,7 @@ def log_history(sig):
         **{f"w_{k}": v for k, v in sig["weights"].items()},
     }
     path = DASH / "history.csv"
-    df = pd.DataFrame([row])
+    df = pd.DataFrame([row], columns=HISTORY_COLUMNS)
     if path.exists():
         prev = pd.read_csv(path)
         mask = prev["asof"].astype(str) == row["asof"]
