@@ -49,6 +49,24 @@ jobs:
       - name: Run dashboard
         run: python src/dashboard.py
 
+      - name: Validate outputs
+        run: |
+          for f in docs/index.html docs/cma_latest.csv docs/history.csv; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: $f is missing or empty"
+              exit 1
+            fi
+          done
+          size=$(wc -c < docs/index.html)
+          if [ "$size" -lt 5000 ]; then
+            echo "ERROR: index.html is suspiciously small (${size} bytes)"
+            exit 1
+          fi
+          for fig in signal_tree signal_history cma allocation; do
+            test -f "docs/figures/${fig}.png" || { echo "ERROR: ${fig}.png missing"; exit 1; }
+          done
+          echo "All outputs validated."
+
       - name: Commit refreshed dashboard
         run: |
           git config user.name "cma-dashboard-bot"

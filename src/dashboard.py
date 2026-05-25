@@ -21,9 +21,8 @@ Pipeline:
   7. Regenerate figures + write HTML dashboard.
 """
 from __future__ import annotations
-import json
-import shutil
 import warnings
+from io import StringIO
 from datetime import datetime
 from pathlib import Path
 
@@ -31,7 +30,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
 ROOT = Path(__file__).resolve().parents[1]
 DASH = ROOT / "docs"
@@ -59,14 +59,42 @@ def compute_signal_and_weights():
                      auto_adjust=True, progress=False)["Close"]
     m = px.resample("ME").last()
     data = pd.DataFrame({k: m[v] for k, v in PROXIES.items()})
+    latest = data.iloc[-1]
+    missing = latest[latest.isna()].index.tolist()
+    if missing:
+        raise ValueError(
+            f"yfinance returned NaN for latest month ({data.index[-1].date()}) "
+            f"for proxies: {missing}. Cannot compute signal."
+        )
     rets = data.pct_change().dropna(how="all")
 
-    t10y2y = pd.read_csv(
+    import requests
+    resp = requests.get(
         "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y",
-        parse_dates=["observation_date"]
+        timeout=30,
+    )
+    resp.raise_for_status()
+    content_type = resp.headers.get("Content-Type", "")
+    if "text/csv" not in content_type and "text/plain" not in content_type:
+        raise ValueError(
+            f"FRED returned unexpected Content-Type: {content_type!r}. "
+            f"Expected CSV data."
+        )
+    t10y2y = pd.read_csv(
+        StringIO(resp.text),
+        parse_dates=["observation_date"],
     ).rename(columns={"observation_date": "date"}).set_index("date")["T10Y2Y"]
     t10y2y = pd.to_numeric(t10y2y, errors="coerce").resample("ME").last()
+    if pd.isna(t10y2y.iloc[-1]):
+        raise ValueError(
+            f"T10Y2Y is NaN for latest month ({t10y2y.index[-1].date()}). "
+            f"FRED data may be unavailable."
+        )
 
+    # Units intentionally mixed: vol6 is decimal (~0.01), T10Y2Y is
+    # percentage points (~0.5).  This is the exact GEP-evolved form.
+    # The z-score normalization absorbs the scale difference.
+    # Do NOT convert T10Y2Y to decimal -- it would break the z-score history.
     vol6 = rets["HYG"].rolling(6).std()
     sig_raw = vol6 + np.sqrt(np.clip(t10y2y, 0, None))
     sig_raw = sig_raw.dropna()
@@ -74,6 +102,11 @@ def compute_signal_and_weights():
     sd = sig_raw.expanding(min_periods=36).std()
     z = (sig_raw - mu) / sd
 
+    if pd.isna(z.iloc[-1]):
+        raise ValueError(
+            f"Computed z-score is NaN for {z.index[-1].date()}. "
+            f"Check input data integrity."
+        )
     asof = z.index[-1]
     z_now = float(z.iloc[-1])
     # Base: barbell PP (25 SPY / 10 TLT / 15 SHY / 25 GLD / 25 TIP).
@@ -118,6 +151,10 @@ def run_cma():
     px = yf.download(CMA_UNIVERSE, start="1998-01-01",
                      auto_adjust=True, progress=False)["Close"]
     monthly = px.resample("ME").last()
+    if len(monthly) > 1:
+        median_gap = int(np.median(np.diff(monthly.index.to_numpy()).astype("timedelta64[D]").astype(int)))
+        if not (25 <= median_gap <= 35):
+            raise ValueError(f"Expected ~monthly frequency but median gap is {median_gap} days")
     rows = []
     for t in CMA_UNIVERSE:
         if t not in monthly.columns: continue
@@ -128,6 +165,11 @@ def run_cma():
         point, q = model.forecast(horizon=6, inputs=[ctx])
         base = float(s.iloc[-1])
         qs = q[0][-1]  # horizon-6 quantiles: [mean, q10..q90]
+        if len(qs) != 10:
+            raise ValueError(
+                f"TimesFM quantile array has {len(qs)} elements, expected 10 "
+                f"([mean, q10..q90]). Model output format may have changed."
+            )
         d = {"ticker": t,
              "mean": float(np.exp(qs[0] - base) - 1),
              "q10":  float(np.exp(qs[1] - base) - 1),
@@ -235,7 +277,7 @@ def make_figures(sig, cma):
     w = sig["weights"]
     labels = [f"{k}\n{v*100:.1f}%" for k, v in w.items() if v > 0]
     values = [v for v in w.values() if v > 0]
-    colors_ = ["#2060c0", "#c03030", "#c09030", "#208030", "#9040a0"]
+    colors_ = ["#2060c0", "#c03030", "#c09030", "#208030", "#9040a0", "#e07020"]
     ax.pie(values, labels=labels, colors=colors_[:len(values)],
            startangle=90, wedgeprops={"edgecolor": "white", "lw": 1.5})
     ax.set_title(f"Current recommended allocation ({sig['bucket']})")
@@ -330,7 +372,7 @@ returns higher.</li>
 <tr><td>T10Y2Y term spread (FRED, month-end)</td>
     <td>{term_val:+.2f}% pts</td></tr>
 <tr><td>max(T10Y2Y, 0)</td>
-    <td>{term_clip:.4f}</td></tr>
+    <td>{term_clip:.4f}% pts</td></tr>
 <tr><td>sqrt of the above</td>
     <td>{sqrt_val:.4f}</td></tr>
 <tr><td><b>Raw signal = vol_6m + sqrt(…)</b></td>
@@ -430,11 +472,13 @@ def log_history(sig):
     df = pd.DataFrame([row])
     if path.exists():
         prev = pd.read_csv(path)
-        # skip if same asof already logged
-        if row["asof"] not in prev["asof"].astype(str).values:
-            df = pd.concat([prev, df], ignore_index=True)
-        else:
+        mask = prev["asof"].astype(str) == row["asof"]
+        if mask.any():
+            for col in df.columns:
+                prev.loc[mask, col] = row[col]
             df = prev
+        else:
+            df = pd.concat([prev, df], ignore_index=True)
     df.to_csv(path, index=False)
 
 
