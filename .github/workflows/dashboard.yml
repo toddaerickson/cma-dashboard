@@ -1,13 +1,12 @@
-name: Monthly dashboard refresh
+name: Monthly dashboard refresh (ARCHIVED)
 
+# Schedule disabled — pipeline archived in favor of credit_signal.py.
+# Keep workflow_dispatch so it can still be run manually if needed.
 on:
-  schedule:
-    # First day of each month at 14:00 UTC (~10am ET). Month-end yfinance data
-    # and FRED T10Y2Y are finalized by then.
-    - cron: "0 14 1 * *"
-  workflow_dispatch:         # allow manual "Run workflow" in the UI
+  # schedule:
+  #   - cron: "0 14 1 * *"
+  workflow_dispatch:
 
-# Required so the workflow can commit the refreshed docs/ back to main.
 permissions:
   contents: write
 
