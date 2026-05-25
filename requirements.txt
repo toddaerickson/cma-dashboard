@@ -1,7 +1,7 @@
 # CPU-only stack. torch CPU wheel is installed via --index-url in the workflow.
 numpy>=1.26
 pandas>=2.1
-scipy>=1.11
+scipy>=1.11  # transitive dep of timesfm; not directly imported
 matplotlib>=3.8
 yfinance>=0.2.40
 requests>=2.31

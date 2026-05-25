@@ -34,15 +34,25 @@ import yfinance as yf
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
+
+def _yf_download(tickers, **kwargs):
+    """Wrapper to handle yfinance auto_adjust deprecation across versions."""
+    kwargs.setdefault("progress", False)
+    try:
+        return yf.download(tickers, auto_adjust=True, **kwargs)
+    except TypeError:
+        return yf.download(tickers, **kwargs)
+
 ROOT = Path(__file__).resolve().parents[1]
 DASH = ROOT / "docs"
 FIG  = DASH / "figures"
 for d in (DASH, FIG):
     d.mkdir(exist_ok=True)
 
-PROXIES = {"SPY": "SPY", "TLT": "VUSTX", "GLD": "GC=F",
+PROXIES = {"SPY": "SPY", "TLT": "VUSTX", "GLD": "GLD",
            "TIP": "VIPSX", "HYG": "VWEHX", "IEF": "VFITX",
            "SHY": "VFISX"}
+GLD_FUTURES_FALLBACK = "GC=F"
 CMA_UNIVERSE = [
     "SPY", "QQQ", "IWM", "EFA", "EEM", "VNQ",
     "TLT", "IEF", "LQD", "HYG", "MUB", "TIP",
@@ -56,8 +66,13 @@ CMA_UNIVERSE = [
 # 1. Signal + allocation
 # -------------------------------------------------------------------
 def compute_signal_and_weights():
-    px = yf.download(list(PROXIES.values()), start="1998-01-01",
-                     auto_adjust=True, progress=False)["Close"]
+    tickers = list(set(PROXIES.values()) | {GLD_FUTURES_FALLBACK})
+    px = _yf_download(tickers, start="1998-01-01")["Close"]
+    # Splice GLD ETF (post-2004) with GC=F futures (pre-2004)
+    if "GLD" in px.columns and GLD_FUTURES_FALLBACK in px.columns:
+        gld_start = px["GLD"].first_valid_index()
+        if gld_start is not None:
+            px.loc[:gld_start, "GLD"] = px.loc[:gld_start, GLD_FUTURES_FALLBACK]
     m = px.resample("ME").last()
     data = pd.DataFrame({k: m[v] for k, v in PROXIES.items()})
     latest = data.iloc[-1]
@@ -158,18 +173,22 @@ def run_cma():
         use_continuous_quantile_head=True, force_flip_invariance=True,
         infer_is_positive=False, fix_quantile_crossing=True,
     ))
-    px = yf.download(CMA_UNIVERSE, start="1998-01-01",
-                     auto_adjust=True, progress=False)["Close"]
+    px = _yf_download(CMA_UNIVERSE, start="1998-01-01")["Close"]
     monthly = px.resample("ME").last()
     if len(monthly) > 1:
         median_gap = int(np.median(np.diff(monthly.index.to_numpy()).astype("timedelta64[D]").astype(int)))
         if not (25 <= median_gap <= 35):
             raise ValueError(f"Expected ~monthly frequency but median gap is {median_gap} days")
     rows = []
+    skipped = []
     for t in CMA_UNIVERSE:
-        if t not in monthly.columns: continue
+        if t not in monthly.columns:
+            skipped.append((t, "not in yfinance data"))
+            continue
         s = np.log(monthly[t].dropna())
-        if len(s) < 36: continue
+        if len(s) < 36:
+            skipped.append((t, f"only {len(s)} months (<36)"))
+            continue
         ctx = s.values.astype(np.float32)
         if len(ctx) > 1024: ctx = ctx[-1024:]
         point, q = model.forecast(horizon=6, inputs=[ctx])
@@ -197,6 +216,9 @@ def run_cma():
         rows.append(d)
     if not rows:
         raise ValueError("No CMA forecasts produced — all tickers failed validation")
+    if skipped:
+        print(f"   CMA: skipped {len(skipped)} tickers: "
+              + ", ".join(f"{t} ({r})" for t, r in skipped))
     return pd.DataFrame(rows).set_index("ticker")
 
 
@@ -451,7 +473,7 @@ Dashboard auto-regenerates monthly via cron (see <code>cron.md</code>).
 """
 
 
-def render_html(sig, cma):
+def render_html(sig):
     wrows = "\n".join(
         f"<tr><td>{k}</td><td>{v*100:.1f}%</td></tr>"
         for k, v in sig["weights"].items() if v > 0
@@ -518,7 +540,7 @@ def main():
     make_figures(sig, cma)
 
     print("4. HTML dashboard …")
-    render_html(sig, cma)
+    render_html(sig)
 
     print("5. history log …")
     log_history(sig)
