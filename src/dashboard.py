@@ -500,7 +500,7 @@ def render_html(sig):
         mu_val=sig["mu_now"], sd_val=sig["sd_now"],
         bucket_rule=bucket_rule,
     )
-    (DASH / "index.html").write_text(html)
+    (DASH / "index.html").write_text(html, encoding="utf-8")
 
 
 # -------------------------------------------------------------------
