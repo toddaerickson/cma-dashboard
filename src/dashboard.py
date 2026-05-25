@@ -14,7 +14,7 @@ Pipeline:
   3. Compute current credit signal:  vol_6m(HYG) + sqrt(max(t10y2y, 0))
      -> expanding z-score; bucket {on | neutral | off}.
   4. Derive recommended weights for this month:
-       PP base:            SPY 25 / TLT 25 / GLD 25 / TIP 25
+       PP base (barbell):  SPY 25 / TLT 10 / SHY 15 / GLD 25 / TIP 25
        Tactical overlay:   bucket determines HYG share stolen from TIP.
   5. Re-run TimesFM CMA forecasts for all assets.
   6. Recenter medians on long-run historical mean.
@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -68,7 +69,6 @@ def compute_signal_and_weights():
         )
     rets = data.pct_change().dropna(how="all")
 
-    import requests
     resp = requests.get(
         "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y",
         timeout=30,
@@ -98,6 +98,12 @@ def compute_signal_and_weights():
     vol6 = rets["HYG"].rolling(6).std()
     sig_raw = vol6 + np.sqrt(np.clip(t10y2y, 0, None))
     sig_raw = sig_raw.dropna()
+    if sig_raw.index[-1] < data.index[-1]:
+        raise ValueError(
+            f"Signal dropped latest month {data.index[-1].date()} after NaN "
+            f"removal. Last valid signal: {sig_raw.index[-1].date()}. "
+            f"Likely index mismatch between vol6 and t10y2y."
+        )
     mu = sig_raw.expanding(min_periods=36).mean()
     sd = sig_raw.expanding(min_periods=36).std()
     z = (sig_raw - mu) / sd
@@ -121,6 +127,10 @@ def compute_signal_and_weights():
     else:
         bucket = "NEUTRAL"
         w = {**base, "TIP": 0.175, "HYG": 0.075}
+
+    wsum = sum(w.values())
+    if abs(wsum - 1.0) > 1e-9:
+        raise ValueError(f"Allocation weights sum to {wsum}, expected 1.0")
 
     return {
         "asof": asof, "z": z_now, "bucket": bucket, "weights": w,
@@ -185,6 +195,8 @@ def run_cma():
         d["hist_mean_6m"] = hmean
         d["shift"] = shift
         rows.append(d)
+    if not rows:
+        raise ValueError("No CMA forecasts produced — all tickers failed validation")
     return pd.DataFrame(rows).set_index("ticker")
 
 
@@ -192,97 +204,107 @@ def run_cma():
 # 3. Figures
 # -------------------------------------------------------------------
 def make_figures(sig, cma):
+    import matplotlib
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from matplotlib.patches import FancyBboxPatch
     plt.rcParams.update({"figure.dpi": 110, "font.size": 10})
 
-    # Signal expression tree with current values
     vol6  = sig["hyg_vol6m_now"]
     term  = sig["t10y2y_now"]
     sqrt_term = float(np.sqrt(max(term, 0)))
     raw   = sig["sig_raw_now"]
 
+    # --- Signal expression tree ---
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.set_xlim(0, 10); ax.set_ylim(0, 6); ax.axis("off")
+    try:
+        ax.set_xlim(0, 10); ax.set_ylim(0, 6); ax.axis("off")
 
-    def box(x, y, text, w=2.4, h=0.9, color="#eef2f8", edge="#4a6fa0"):
-        b = FancyBboxPatch((x - w/2, y - h/2), w, h,
-                           boxstyle="round,pad=0.05",
-                           linewidth=1.5, edgecolor=edge, facecolor=color)
-        ax.add_patch(b)
-        ax.text(x, y, text, ha="center", va="center", fontsize=10)
+        def box(x, y, text, w=2.4, h=0.9, color="#eef2f8", edge="#4a6fa0"):
+            b = FancyBboxPatch((x - w/2, y - h/2), w, h,
+                               boxstyle="round,pad=0.05",
+                               linewidth=1.5, edgecolor=edge, facecolor=color)
+            ax.add_patch(b)
+            ax.text(x, y, text, ha="center", va="center", fontsize=10)
 
-    def arrow(x1, y1, x2, y2):
-        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle="-", color="#666", lw=1.2))
+        def arrow(x1, y1, x2, y2):
+            ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                        arrowprops=dict(arrowstyle="-", color="#666", lw=1.2))
 
-    # Root: ADD
-    box(5, 5, f"+\nraw signal = {raw:.4f}", color="#ffe9d6", edge="#c06030")
-    # Left child: vol_6m value
-    box(2.5, 3, f"vol_6m(HYG)\n= {vol6:.4f}", color="#dfeedf", edge="#408040")
-    # Right child: sqrt
-    box(7.5, 3, f"sqrt\n= {sqrt_term:.4f}", color="#dfe6f3", edge="#4060a0")
-    # Right grandchild: max(t10y2y, 0)
-    box(7.5, 1, f"max(T10Y2Y, 0)\n= {max(term,0):.2f}%  (raw {term:+.2f}%)",
-        w=3.4, color="#f1edf7", edge="#7040a0")
+        box(5, 5, f"+\nraw signal = {raw:.4f}", color="#ffe9d6", edge="#c06030")
+        box(2.5, 3, f"vol_6m(HYG)\n= {vol6:.4f}", color="#dfeedf", edge="#408040")
+        box(7.5, 3, f"sqrt\n= {sqrt_term:.4f}", color="#dfe6f3", edge="#4060a0")
+        box(7.5, 1, f"max(T10Y2Y, 0)\n= {max(term,0):.2f}%  (raw {term:+.2f}%)",
+            w=3.4, color="#f1edf7", edge="#7040a0")
 
-    arrow(5, 4.55, 2.5, 3.45); arrow(5, 4.55, 7.5, 3.45)
-    arrow(7.5, 2.55, 7.5, 1.45)
+        arrow(5, 4.55, 2.5, 3.45); arrow(5, 4.55, 7.5, 3.45)
+        arrow(7.5, 2.55, 7.5, 1.45)
 
-    ax.text(5, 5.75, "GEP-evolved credit signal tree (HYG 6M forward return)",
-            ha="center", fontsize=11, weight="bold")
-    ax.text(5, 0.15,
-            f"z = (raw − μ_expanding) / σ_expanding  →  "
-            f"current z = {sig['z']:+.2f}  →  bucket = {sig['bucket']}",
-            ha="center", fontsize=9.5, color="#333",
-            bbox=dict(boxstyle="round,pad=0.4", fc="#fafafa", ec="#aaa"))
-    plt.tight_layout()
-    plt.savefig(FIG / "signal_tree.png", bbox_inches="tight"); plt.close()
+        ax.text(5, 5.75, "GEP-evolved credit signal tree (HYG 6M forward return)",
+                ha="center", fontsize=11, weight="bold")
+        ax.text(5, 0.15,
+                f"z = (raw − μ_expanding) / σ_expanding  →  "
+                f"current z = {sig['z']:+.2f}  →  bucket = {sig['bucket']}",
+                ha="center", fontsize=9.5, color="#333",
+                bbox=dict(boxstyle="round,pad=0.4", fc="#fafafa", ec="#aaa"))
+        plt.tight_layout()
+        plt.savefig(FIG / "signal_tree.png", bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
-    # Signal z over time with bucket bands
+    # --- Signal z history ---
     fig, ax = plt.subplots(figsize=(9.5, 3.5))
-    z = sig["z_history"].dropna()
-    ax.plot(z.index, z.values, lw=1.2, color="#2060c0")
-    ax.axhspan(0.5, 4, color="#c03030", alpha=0.09, label="ON (z ≥ +0.5)")
-    ax.axhspan(-0.5, 0.5, color="#888", alpha=0.09, label="NEUTRAL")
-    ax.axhspan(-4, -0.5, color="#208030", alpha=0.09, label="OFF (z ≤ -0.5)")
-    ax.axhline(sig["z"], color="#c03030", lw=1.2, ls="--")
-    ax.set_ylim(z.min() - 0.2, z.max() + 0.2)
-    ax.set_ylabel("Credit-signal z-score")
-    ax.set_title(f"Credit signal history (as of {sig['asof'].date()}) — current bucket: {sig['bucket']}")
-    ax.legend(loc="lower left", ncol=3, fontsize=8)
-    ax.grid(True, alpha=0.3)
-    ax.xaxis.set_major_locator(mdates.YearLocator(3))
-    plt.tight_layout()
-    plt.savefig(FIG / "signal_history.png", bbox_inches="tight"); plt.close()
+    try:
+        z = sig["z_history"].dropna()
+        ax.plot(z.index, z.values, lw=1.2, color="#2060c0")
+        ax.axhspan(0.5, 4, color="#c03030", alpha=0.09, label="ON (z ≥ +0.5)")
+        ax.axhspan(-0.5, 0.5, color="#888", alpha=0.09, label="NEUTRAL")
+        ax.axhspan(-4, -0.5, color="#208030", alpha=0.09, label="OFF (z ≤ -0.5)")
+        ax.axhline(sig["z"], color="#c03030", lw=1.2, ls="--")
+        ax.set_ylim(z.min() - 0.2, z.max() + 0.2)
+        ax.set_ylabel("Credit-signal z-score")
+        ax.set_title(f"Credit signal history (as of {sig['asof'].date()}) — current bucket: {sig['bucket']}")
+        ax.legend(loc="lower left", ncol=3, fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_locator(mdates.YearLocator(3))
+        plt.tight_layout()
+        plt.savefig(FIG / "signal_history.png", bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
-    # CMA quantiles
+    # --- CMA quantiles ---
     c = cma.sort_values("q50_adj")
     fig, ax = plt.subplots(figsize=(9, 8))
-    y = np.arange(len(c))
-    ax.barh(y, (c["q90_adj"] - c["q10_adj"]) * 100, left=c["q10_adj"] * 100,
-            color="#c0d4ed", edgecolor="#7a9ec9", lw=0.5, height=0.6)
-    ax.scatter(c["q50_adj"] * 100, y, color="#c03030", s=28, zorder=5)
-    ax.axvline(0, color="k", lw=0.6)
-    ax.set_yticks(y); ax.set_yticklabels(c.index, fontsize=9)
-    ax.set_xlabel("6-month forward total return (%)")
-    ax.set_title("CMA distributions (80% PI, historical-mean centered)")
-    ax.grid(True, axis="x", alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(FIG / "cma.png", bbox_inches="tight"); plt.close()
+    try:
+        y = np.arange(len(c))
+        ax.barh(y, (c["q90_adj"] - c["q10_adj"]) * 100, left=c["q10_adj"] * 100,
+                color="#c0d4ed", edgecolor="#7a9ec9", lw=0.5, height=0.6)
+        ax.scatter(c["q50_adj"] * 100, y, color="#c03030", s=28, zorder=5)
+        ax.axvline(0, color="k", lw=0.6)
+        ax.set_yticks(y); ax.set_yticklabels(c.index, fontsize=9)
+        ax.set_xlabel("6-month forward total return (%)")
+        ax.set_title("CMA distributions (80% PI, historical-mean centered)")
+        ax.grid(True, axis="x", alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(FIG / "cma.png", bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
-    # Allocation pie
+    # --- Allocation pie ---
     fig, ax = plt.subplots(figsize=(5.5, 5.5))
-    w = sig["weights"]
-    labels = [f"{k}\n{v*100:.1f}%" for k, v in w.items() if v > 0]
-    values = [v for v in w.values() if v > 0]
-    colors_ = ["#2060c0", "#c03030", "#c09030", "#208030", "#9040a0", "#e07020"]
-    ax.pie(values, labels=labels, colors=colors_[:len(values)],
-           startangle=90, wedgeprops={"edgecolor": "white", "lw": 1.5})
-    ax.set_title(f"Current recommended allocation ({sig['bucket']})")
-    plt.tight_layout()
-    plt.savefig(FIG / "allocation.png", bbox_inches="tight"); plt.close()
+    try:
+        w = sig["weights"]
+        labels = [f"{k}\n{v*100:.1f}%" for k, v in w.items() if v > 0]
+        values = [v for v in w.values() if v > 0]
+        colors_ = ["#2060c0", "#c03030", "#c09030", "#208030", "#9040a0", "#e07020"]
+        ax.pie(values, labels=labels, colors=colors_[:len(values)],
+               startangle=90, wedgeprops={"edgecolor": "white", "lw": 1.5})
+        ax.set_title(f"Current recommended allocation ({sig['bucket']})")
+        plt.tight_layout()
+        plt.savefig(FIG / "allocation.png", bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
 
 # -------------------------------------------------------------------
